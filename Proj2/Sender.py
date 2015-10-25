@@ -1,0 +1,144 @@
+import sys
+import getopt
+
+import Checksum
+import BasicSender
+
+'''
+This is a skeleton sender class. Create a fantastic transport protocol here.
+'''
+class Sender(BasicSender.BasicSender):
+
+
+    def __init__(self, dest, port, filename, debug=False, sackMode=False):
+        super(Sender, self).__init__(dest, port, filename, debug)
+        self.sackMode = sackMode
+        self.debug = debug
+
+    # Main sending loop.
+    def start(self):
+        isnCount = 0
+        ackCount = isnCount+1
+        inflight = 0
+        seekCount = 0
+        window = list()
+        finAck = None
+        finFound = False
+        synsentcount = 1
+        # initiating connection
+        synpacket = self.make_packet('syn', isnCount,None)
+        isnCount+=1
+
+        synreturn = None
+        while(synreturn==None):
+            self.send(synpacket)
+            #print("Syn sent count: " + str(synsentcount))
+            synreturn = self.receive(.5)
+            if(synreturn!=None and not self.check_ack_packet(synreturn)):
+                #print("Syn bad packet found")
+                synreturn = None
+            synsentcount +=1
+        ackCount+=1
+        #print("Connection created")
+        f = open(filename, 'r')
+        #print("File opened")
+        while(True):
+            #sending
+            while(inflight<7 and not finFound):
+                tempDat = f.read(1000)
+                if(sys.getsizeof(tempDat)<1000):
+                    finPacket = self.make_packet('fin', isnCount, tempDat)
+                    window.append(finPacket)
+                    self.send(finPacket)
+                    finAck = isnCount+1
+                    #print("Sending final packet " + str(isnCount) + " with final ack: " + str(finAck))
+
+                    finFound = True
+                else:
+                    tempPacket = self.make_packet('dat', isnCount, tempDat)
+                    window.append(tempPacket)
+                    self.send(tempPacket)
+                    #print("Sending packet " + str(isnCount))
+                inflight+=1
+                isnCount+=1
+            #receiving
+            #print("RECEIVING")
+            rPacket = self.receive(.5)
+            if(rPacket==None):
+                #print("timeout")
+                for w in window:
+                    self.send(w)
+            else:
+               if(self.check_ack_packet(rPacket)): 
+                    tempmsg_type, tempseqno, tempdata, tempchecksum = self.split_packet(rPacket)
+                    tempseqno = int(tempseqno)
+                    if(finAck==tempseqno):
+                        #print("FINISHED")
+                        break
+                    if(tempseqno>=ackCount):
+                        #print("Packet received with ack: " + str(tempseqno))
+                        diff = tempseqno-ackCount
+                        inflight -= diff
+                        if(inflight<0):
+                            inflight=0
+                        ackCount = tempseqno+1
+        f.close()
+        #print("Exited")
+
+
+
+    def check_ack_packet(self, packet):
+        msg_type, seqno, data, checksum = self.split_packet(packet)
+        if(msg_type != 'ack'):
+            return False
+        
+        elif(Checksum.validate_checksum(checksum)):
+            return False
+        else:
+            return True
+        
+'''
+This will be run if you run this script from the command line. You should not
+change any of this; the grader may rely on the behavior here to test your
+submission.
+'''
+if __name__ == "__main__":
+    def usage():
+        print "BEARS-TP Sender"
+        print "-f FILE | --file=FILE The file to transfer; if empty reads from STDIN"
+        print "-p PORT | --port=PORT The destination port, defaults to 33122"
+        print "-a ADDRESS | --address=ADDRESS The receiver address or hostname, defaults to localhost"
+        print "-d | --debug Print debug messages"
+        print "-h | --help Print this usage message"
+        print "-k | --sack Enable selective acknowledgement mode"
+
+    try:
+        opts, args = getopt.getopt(sys.argv[1:],
+                               "f:p:a:dk", ["file=", "port=", "address=", "debug=", "sack="])
+    except:
+        usage()
+        exit()
+
+    port = 33122
+    dest = "localhost"
+    filename = None
+    debug = False
+    sackMode = False
+
+    for o,a in opts:
+        if o in ("-f", "--file="):
+            filename = a
+        elif o in ("-p", "--port="):
+            port = int(a)
+        elif o in ("-a", "--address="):
+            dest = a
+        elif o in ("-d", "--debug="):
+            debug = True
+        elif o in ("-k", "--sack="):
+            sackMode = True
+
+    s = Sender(dest,port,filename,debug, sackMode)
+    try:
+        s.start()
+    except (KeyboardInterrupt, SystemExit):
+        exit()
