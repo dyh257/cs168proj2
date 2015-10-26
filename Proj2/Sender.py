@@ -26,7 +26,7 @@ class Sender(BasicSender.BasicSender):
         lastAckCount = 1
         expectedAck = isn+1
         packetsSent = 0
-        packetSize = random.randint(1000, 1470)
+        packetSize = 1400
         finAck = None
 
         #Initiation
@@ -36,7 +36,7 @@ class Sender(BasicSender.BasicSender):
         while(not connectionMade):
             self.send(synpacket)
             synreturn = self.receive(timeout)
-            if(synreturn!=None and self.check_ack_packet(synreturn)):
+            if(synreturn!=None and Checksum.validate_checksum(synreturn)):
                 connectionMade=True
         expectedAck+=1
         #ack match for connection ack?
@@ -78,7 +78,7 @@ class Sender(BasicSender.BasicSender):
                 packetsSent += 7
                 lastAck = None
                 lastAckCount = 0
-            elif(self.check_ack_packet(received)):
+            elif(Checksum.validate_checksum(received)):
                 #Packet received
                 packetsSent = 0
                 msg_type, seqno, data, checksum = self.split_packet(received)
@@ -144,17 +144,6 @@ class Sender(BasicSender.BasicSender):
             msg_type, seqno, data, checksum = self.split_packet(w)
             if (int(seqno)-1) not in ackList:
                 self.send(w)
-
-    def check_ack_packet(self, packet):
-        msg_type, seqno, data, checksum = self.split_packet(packet)
-        if(msg_type != 'ack' and not self.sackMode):
-            return False
-        elif(msg_type!='sack' and self.sackMode):
-            return False
-        elif(Checksum.validate_checksum(checksum)):
-            return False
-        else:
-            return True
 
     def parseSack(self, seqno):
         ackCount = seqno[:seqno.index(';')]
