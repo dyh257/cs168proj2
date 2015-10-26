@@ -17,115 +17,109 @@ class Sender(BasicSender.BasicSender):
 
     # Main sending loop.
     def start(self):
-        isnCount = 0
-        ackCount = isnCount+1
-        inflight = 0
-        seekCount = 0
+        #variables
+        isn = 0
+        timeout = .5
         window = list()
-        finAck = None
-        finFound = False
-        synsentcount = 1
         lastAck = None
-        fastRetransmit = 1
-        tempseqno = None
-        # initiating connection
-        synpacket = self.make_packet('syn', isnCount,None)
-        isnCount+=1
+        lastAckCount = 1
+        expectedAck = isn+1
 
-        synreturn = None
-        while(synreturn==None):
+        #Initiation
+        synpacket = self.make_packet('syn', isn, None)
+        isn += 1
+        connectionMade = False
+        while(not connectionMade):
             self.send(synpacket)
-            #print("Syn sent count: " + str(synsentcount))
-            synreturn = self.receive(.5)
-            if(synreturn!=None and not self.check_ack_packet(synreturn)):
-                #print("Syn bad packet found")
-                synreturn = None
-            synsentcount +=1
-        ackCount+=1
-        #print("Connection created")
-        #print("File opened")
-        while(True):
-            #sending
-            while(inflight<7 and not finFound):
-                tempDat = self.infile.read(1000)
-                if(sys.getsizeof(tempDat)<1000):
-                    finPacket = self.make_packet('fin', isnCount, tempDat)
-                    window.append(finPacket)
-                    self.send(finPacket)
-                    finAck = isnCount+1
-                    #print("Sending final packet " + str(isnCount) + " with final ack: " + str(finAck))
+            synreturn = self.receive(timeout)
+            if(synreturn!=None and self.check_ack_packet(synreturn)):
+                connectionMade=True
+        expectedAck+=1
+        #ack match for connection ack?
+        #send initial 7 packets
+        for i in range(7):
+            data=self.infile.read(1000)
+            if(data==''):
+                break
+            if(sys.getsizeof(data)<1000):
+                #finpacket
+                packet = self.make_packet('fin',isn,data)
+                finAck = isn+1
+                window.append(packet)
+            else:
+                #normalpacket
+                packet = self.make_packet('dat',isn,data)
+                window.append(packet)
+            isn+=1
+            self.send(packet)
 
-                    finFound = True
+        #receiving
+        #checking if first packet isn't final packet
+        ackList = list()
+        while(True):
+            received = self.receive(timeout)
+            if(received==None):
+                if(self.sackMode):
+                    self.handleSack(window,ackList)
                 else:
-                    tempPacket = self.make_packet('dat', isnCount, tempDat)
-                    window.append(tempPacket)
-                    self.send(tempPacket)
-                    #print("Sending packet " + str(isnCount))
-                inflight+=1
-                isnCount+=1
-            #receiving
-            #print("RECEIVING")
-            rPacket = self.receive(.5)
-            if(rPacket==None):
-                #print("timeout")
-                if(not self.sackMode):
                     for w in window:
                         self.send(w)
-                else:
-                    #SACKMODE
-                    if(tempseqno == None):
-                        for w in window:
-                            self.send(w)
-                    else:
-                        for w in window:
-                            temp2msg_type, temp2seqno, temp2data, temp2checksum = self.split_packet(w)
-                            if (int(temp2seqno)-1) not in tempacks:
-                                self.send(w)
-
                 lastAck = None
-                fastRetransmit=1
-            else:
-               if(self.check_ack_packet(rPacket)):                         
-                    tempmsg_type, tempseqno, tempdata, tempchecksum = self.split_packet(rPacket)
-                    if(self.sackMode):
-                        tempack, tempacks = self.parseSack(tempseqno)
-                        tempseqno = int(tempack)
-                    else:
-                        tempseqno = int(tempseqno)
-                    if(finAck==tempseqno):
-                        #print("FINISHED")
-                        break
-                    if(tempseqno>=ackCount):
-                        #print("Packet received with ack: " + str(tempseqno))
-                        diff = tempseqno-ackCount
-                        inflight -= diff
-                        if(inflight<0):
-                            window=list()
-                            inflight=0
-                        else:
-                            window = window[diff:]
-                        ackCount = tempseqno+1
-                        lastAck = tempseqno
-                        fastRetransmit = 1
-                    if(tempseqno==lastAck):
-                        fastRetransmit += 1
-                        if(fastRetransmit==4):
-                            if(not self.sackMode):
-                                for w in window:
-                                    temp1msg_type, temp1seqno, temp1data, temp1checksum = self.split_packet(w)
-                                    if(int(temp1seqno)==lastAck):
-                                        self.send(w)
-                            else:
-                                #SACKMODE
-                                for w in window:
-                                    temp2msg_type, temp2seqno, temp2data, temp2checksum = self.split_packet(w)
-                                    if (int(temp2seqno)-1) not in tempacks:
-                                        self.send(w)
+                lastAckCount = 0
+            elif(self.check_ack_packet(received)):
+                #Packet received
+                msg_type, seqno, data, checksum = self.split_packet(received)
+                if(self.sackMode):
+                    ack, ackList = self.parseSack(seqno)
+                    currAck = int(ack)
+                else:
+                    currAck = int(seqno)
 
-        self.infile.close()
+                #finAck
+                if(currAck==finAck):
+                    break
+
+                #fasttransmit
+                if(lastAck==currAck):
+                    lastAckCount+=1
+                    if(lastAckCount==4):
+                        if(self.sackMode):
+                            self.handleSack(window,ackList)
+                        else:
+                            for w in window:
+                                self.send(w)
+                else:
+                    #window shift
+                    if(currAck>=expectedAck):
+                        diff = currAck-expectedAck+1
+                        expectedAck = currAck+1
+                        window = window[diff-1:]
+                        for i in range(diff):
+                            data=self.infile.read(1000)
+                            if(data==''):
+                                break
+                            if(sys.getsizeof(data)<1000):
+                                #finpacket
+                                packet = self.make_packet('fin',isn,data)
+                                finAck = isn+1
+                                window.append(packet)
+                            else:
+                                #normalpacket
+                                packet = self.make_packet('dat',isn,data)
+                                window.append(packet)
+                            isn+=1
+                            self.send(packet)
+                    lastAckCount=1
+                    lastAck = currAck
         #print("Exited")
 
 
+
+    def handleSack(self, window, ackList):
+        for w in window:
+            msg_type, seqno, data, checksum = self.split_packet(w)
+            if (int(seqno)-1) not in ackList:
+                self.send(w)
 
     def check_ack_packet(self, packet):
         msg_type, seqno, data, checksum = self.split_packet(packet)
