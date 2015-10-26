@@ -25,6 +25,9 @@ class Sender(BasicSender.BasicSender):
         finAck = None
         finFound = False
         synsentcount = 1
+        lastAck = None
+        fastRetransmit = 1
+        tempseqno = None
         # initiating connection
         synpacket = self.make_packet('syn', isnCount,None)
         isnCount+=1
@@ -40,12 +43,11 @@ class Sender(BasicSender.BasicSender):
             synsentcount +=1
         ackCount+=1
         #print("Connection created")
-        f = open(filename, 'r')
         #print("File opened")
         while(True):
             #sending
             while(inflight<7 and not finFound):
-                tempDat = f.read(1000)
+                tempDat = self.infile.read(1000)
                 if(sys.getsizeof(tempDat)<1000):
                     finPacket = self.make_packet('fin', isnCount, tempDat)
                     window.append(finPacket)
@@ -66,12 +68,30 @@ class Sender(BasicSender.BasicSender):
             rPacket = self.receive(.5)
             if(rPacket==None):
                 #print("timeout")
-                for w in window:
-                    self.send(w)
+                if(not self.sackMode):
+                    for w in window:
+                        self.send(w)
+                else:
+                    #SACKMODE
+                    if(tempseqno == None):
+                        for w in window:
+                            self.send(w)
+                    else:
+                        for w in window:
+                            temp2msg_type, temp2seqno, temp2data, temp2checksum = self.split_packet(w)
+                            if (int(temp2seqno)-1) not in tempacks:
+                                self.send(w)
+
+                lastAck = None
+                fastRetransmit=1
             else:
-               if(self.check_ack_packet(rPacket)): 
+               if(self.check_ack_packet(rPacket)):                         
                     tempmsg_type, tempseqno, tempdata, tempchecksum = self.split_packet(rPacket)
-                    tempseqno = int(tempseqno)
+                    if(self.sackMode):
+                        tempack, tempacks = self.parseSack(tempseqno)
+                        tempseqno = int(tempack)
+                    else:
+                        tempseqno = int(tempseqno)
                     if(finAck==tempseqno):
                         #print("FINISHED")
                         break
@@ -80,22 +100,50 @@ class Sender(BasicSender.BasicSender):
                         diff = tempseqno-ackCount
                         inflight -= diff
                         if(inflight<0):
+                            window=list()
                             inflight=0
+                        else:
+                            window = window[diff:]
                         ackCount = tempseqno+1
-        f.close()
+                        lastAck = tempseqno
+                        fastRetransmit = 1
+                    if(tempseqno==lastAck):
+                        fastRetransmit += 1
+                        if(fastRetransmit==4):
+                            if(not self.sackMode):
+                                for w in window:
+                                    temp1msg_type, temp1seqno, temp1data, temp1checksum = self.split_packet(w)
+                                    if(int(temp1seqno)==lastAck):
+                                        self.send(w)
+                            else:
+                                #SACKMODE
+                                for w in window:
+                                    temp2msg_type, temp2seqno, temp2data, temp2checksum = self.split_packet(w)
+                                    if (int(temp2seqno)-1) not in tempacks:
+                                        self.send(w)
+
+        self.infile.close()
         #print("Exited")
 
 
 
     def check_ack_packet(self, packet):
         msg_type, seqno, data, checksum = self.split_packet(packet)
-        if(msg_type != 'ack'):
+        if(msg_type != 'ack' and not self.sackMode):
             return False
-        
+        elif(msg_type!='sack' and self.sackMode):
+            return False
         elif(Checksum.validate_checksum(checksum)):
             return False
         else:
             return True
+
+    def parseSack(self, seqno):
+        ackCount = seqno[:seqno.index(';')]
+        temp = seqno[seqno.index(';') + 1:]
+        acks = temp.split()
+        intacks = [int(x) for x in acks]
+        return ackCount,intacks
         
 '''
 This will be run if you run this script from the command line. You should not

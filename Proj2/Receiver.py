@@ -13,7 +13,7 @@ class Connection():
         self.host = host
         self.port = port
         self.max_buf_size = 7
-        self.outfile = open("%s.%d" % (host,port),"w")
+        self.outfile = open("%s.%d" % (host,port),"wb")
         self.seqnums = {} # enforce single instance of each seqno
 
     def ack(self, seqno, data, sackMode = False):
