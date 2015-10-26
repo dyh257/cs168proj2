@@ -3,6 +3,7 @@ import getopt
 
 import Checksum
 import BasicSender
+import random
 
 '''
 This is a skeleton sender class. Create a fantastic transport protocol here.
@@ -24,9 +25,12 @@ class Sender(BasicSender.BasicSender):
         lastAck = None
         lastAckCount = 1
         expectedAck = isn+1
+        packetsSent = 0
+        packetSize = random.randint(1000, 1470)
+        finAck = None
 
         #Initiation
-        synpacket = self.make_packet('syn', isn, None)
+        synpacket = self.make_packet('syn', isn, '')
         isn += 1
         connectionMade = False
         while(not connectionMade):
@@ -37,19 +41,23 @@ class Sender(BasicSender.BasicSender):
         expectedAck+=1
         #ack match for connection ack?
         #send initial 7 packets
+        #prolly also want to check if EXACTLY divisible by your arbitrary 1000
         for i in range(7):
-            data=self.infile.read(1000)
+            data=self.infile.read(packetSize)
             if(data==''):
                 break
-            if(sys.getsizeof(data)<1000):
+            if(sys.getsizeof(data)<packetSize):
                 #finpacket
                 packet = self.make_packet('fin',isn,data)
                 finAck = isn+1
                 window.append(packet)
+                #print(len(window))
             else:
                 #normalpacket
                 packet = self.make_packet('dat',isn,data)
                 window.append(packet)
+                #print(len(window))
+
             isn+=1
             self.send(packet)
 
@@ -59,15 +67,20 @@ class Sender(BasicSender.BasicSender):
         while(True):
             received = self.receive(timeout)
             if(received==None):
+                if(packetsSent>50):
+                    self.start()
+                    break
                 if(self.sackMode):
                     self.handleSack(window,ackList)
                 else:
                     for w in window:
                         self.send(w)
+                packetsSent += 7
                 lastAck = None
                 lastAckCount = 0
             elif(self.check_ack_packet(received)):
                 #Packet received
+                packetsSent = 0
                 msg_type, seqno, data, checksum = self.split_packet(received)
                 if(self.sackMode):
                     ack, ackList = self.parseSack(seqno)
@@ -81,19 +94,25 @@ class Sender(BasicSender.BasicSender):
 
                 #fasttransmit
                 if(lastAck==currAck):
+                    #print("Found duplicate ack! : " + str(lastAckCount+1))
                     lastAckCount+=1
                     if(lastAckCount==4):
                         if(self.sackMode):
                             self.handleSack(window,ackList)
                         else:
                             for w in window:
-                                self.send(w)
+                                tempmsg_type, tempseqno, tempdata, tempchecksum = self.split_packet(w)
+                                if(int(tempseqno) == currAck):
+                                    self.send(w)
+                        lastAckCount = 1
+                        lastAck = None
                 else:
                     #window shift
                     if(currAck>=expectedAck):
                         diff = currAck-expectedAck+1
                         expectedAck = currAck+1
-                        window = window[diff-1:]
+                        window = window[diff:]
+                        #print("New window size: " + str(len(window)) + " after removing" + str(diff))
                         for i in range(diff):
                             data=self.infile.read(1000)
                             if(data==''):
@@ -103,12 +122,17 @@ class Sender(BasicSender.BasicSender):
                                 packet = self.make_packet('fin',isn,data)
                                 finAck = isn+1
                                 window.append(packet)
+                                #print(len(window))
+
                             else:
                                 #normalpacket
                                 packet = self.make_packet('dat',isn,data)
                                 window.append(packet)
+                                #print(len(window))
+
                             isn+=1
                             self.send(packet)
+                    #receiving any non duplicate resets the fastRetransmit counters
                     lastAckCount=1
                     lastAck = currAck
         #print("Exited")
@@ -135,8 +159,11 @@ class Sender(BasicSender.BasicSender):
     def parseSack(self, seqno):
         ackCount = seqno[:seqno.index(';')]
         temp = seqno[seqno.index(';') + 1:]
-        acks = temp.split()
-        intacks = [int(x) for x in acks]
+        acks = temp.split(',')
+        if('' in acks):
+            intacks = []
+        else:
+            intacks = [int(x) for x in acks]
         return ackCount,intacks
         
 '''
