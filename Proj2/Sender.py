@@ -30,14 +30,21 @@ class Sender(BasicSender.BasicSender):
         finAck = None
 
         #Initiation
-        synpacket = self.make_packet('syn', isn, '')
+        synpacket = self.make_packet('syn', isn,'')
         isn += 1
         connectionMade = False
         while(not connectionMade):
             self.send(synpacket)
             synreturn = self.receive(timeout)
-            if(synreturn!=None and Checksum.validate_checksum(synreturn)):
-                connectionMade=True
+            if(synreturn!=None):
+                synmsg_type, synseqno, syndata, synchecksum = self.split_packet(synreturn)
+                if(self.sackMode):
+                    s, synAcks = self.parseSack(synseqno)
+                    synAck = int(s)
+                else:
+                    synAck = int(synseqno)
+                if(Checksum.validate_checksum(synreturn) and synAck==expectedAck):
+                    connectionMade=True
         expectedAck+=1
         #ack match for connection ack?
         #send initial 7 packets
@@ -136,6 +143,7 @@ class Sender(BasicSender.BasicSender):
                     lastAckCount=1
                     lastAck = currAck
         #print("Exited")
+        self.infile.close()
 
 
 
